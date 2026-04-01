@@ -149,7 +149,7 @@ IMPLEMENT → MERGE → TEST → DISCUSS → IMPLEMENT に戻る or SHUTDOWN
 
 ## 詳しい解説
 
-Zenn 記事: https://zenn.dev/rpg478/articles/multi-agent-copilot-collaboration
+Zenn 記事: https://zenn.dev/midomo/articles/40cd64af2d617a
 
 ## License
 
