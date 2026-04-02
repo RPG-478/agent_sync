@@ -1,8 +1,38 @@
-# agent_sync — GitHub Copilot マルチエージェント協調 CLI
+﻿# agent_sync — GitHub Copilot マルチエージェント協調 CLI
 
-自作 TCP サーバーで複数の GitHub Copilot エージェントを連携させるツール。
+自作 TCP サーバーで **GitHub Copilot を N体並列に動かして、勝手に協調させる**仕組みです。
 
-VS Code のチャットタブを複数開き、各タブの Copilot に別の役割を与えて並列に動かす。サーバーがメッセージング・フェーズ同期・議論ループを管理する。
+v3 ではオーケストレーター 1体 + 専門エージェント 5体の構成で動かしていましたが、**Copilot が勝手に止まる問題**がどうしても解決できず、人間が画面に張り付く運用になっていました。v6 では VS Code の Agent Hook を使って、この問題を根本的に潰しています。Hook 3本（合計 100行ちょっと）でエージェントが勝手にサーバーと同期し続ける仕組みができて、人間は最初に指示を出したら SHUTDOWN まで放置できるようになりました。
+
+## v3 → v6 で何が変わった？
+
+| | v3 | v6 |
+|---|---|---|
+| 構成 | オーケストレーター 1 + 専門 5 | **全員フラット（対等）** |
+| ブランチ | エージェントごとに別ブランチ | **同一ブランチ** |
+| マージ | オーケストレーターが手動マージ | **不要** |
+| Copilot が勝手に止まる | 人間が監視して手動再送 | **Stop Hook で自動阻止** |
+| メッセージ検知 | listen のタイムアウト待ち | **PostToolUse Hook で即時通知** |
+| エージェント数 | 固定 6体 | **N体（環境変数で変更可）** |
+
+## ファイル構成
+
+```
+agent_sync/
+├── server_v6.py        # TCP サーバー（フェーズ管理・メッセージキュー）
+├── client_v6.py        # CLI クライアント（Copilot がターミナルで叩く）
+├── monitor.py          # ライブダッシュボード（人間が眺める用）
+├── notifier.py         # バックグラウンド通知ウォッチャー
+├── docs/               # ドキュメント
+├── hooks/              # VS Code Agent Hook スクリプト
+├── examples/           # .agent.md テンプレート
+└── tests/              # テスト
+
+# v3 のファイル（レガシー）
+├── server.py           # v3 サーバー
+├── client.py           # v3 クライアント
+└── instructions/       # v3 用の指示書テンプレート
+```
 
 ## セットアップ
 
@@ -13,144 +43,41 @@ cd agent_sync
 
 **依存ライブラリなし。** Python 3.10+ の標準ライブラリだけで動きます。
 
-## クイックスタート
+## とりあえず動かしたい人
 
-### 1. サーバー起動
+→ [docs/QUICKSTART.md](docs/QUICKSTART.md)
 
-```powershell
-python -m agent_sync server --port 9800
-```
+## ドキュメント
 
-### 2. Copilot タブに役割を渡す
-
-`instructions/` フォルダに各エージェント用の指示書（Markdown）を置いて、各タブの Copilot にこう伝えます：
-
-**オーケストレーター（タブ 0）：**
-```
-あなたはオーケストレーターです。
-instructions/00_orchestrator.md を読んで指示に従ってください。
-全エージェントの参加を確認したら set-phase IMPLEMENT でフェーズを開始してください。
-```
-
-**専門エージェント（タブ 1〜N）：**
-```
-あなたの名前は PromptForge です。
-instructions/01_prompt_forge.md を読んで指示に従ってください。
-まず以下を実行してサーバーに参加してください:
-
-python -m agent_sync join PromptForge
-git checkout -b agent/prompt-forge
-python -m agent_sync set-branch PromptForge agent/prompt-forge
-
-実装が終わったら:
-git add -A && git commit -m "PromptForge: <概要>"
-python -m agent_sync merge-request PromptForge --branch agent/prompt-forge --message "<概要>"
-
-その後 listen で待機してください。shutdown が届くまで帰らないでください。
-```
-
-### 3. 進捗確認
-
-```powershell
-python -m agent_sync status
-```
-
-## フェーズ管理
-
-```
-IMPLEMENT → MERGE → TEST → DISCUSS → IMPLEMENT に戻る or SHUTDOWN
-```
-
-| フェーズ | 内容 |
+| ファイル | 内容 |
 |---------|------|
-| IMPLEMENT | 各エージェントがブランチで実装。完了したら `merge-request` |
-| MERGE | オーケストレーターが全ブランチをマージ |
-| TEST | オーケストレーターがテスト実行 |
-| DISCUSS | テスト失敗時に全員で議論 → `propose` で修正案提出 |
-| SHUTDOWN | 全目標達成。全エージェントに終了通知 |
+| [docs/QUICKSTART.md](docs/QUICKSTART.md) | ゼロから動かすまでの手順 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | なぜこの設計にしたか、フェーズの流れ、プロトコル |
+| [docs/HOOKS.md](docs/HOOKS.md) | Hook 3本の仕組みと「なぜ必要か」 |
+| [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) | 全コマンドの使い方 |
 
-## CLI コマンド一覧
+## バージョンの変遷
 
-### 基本
+| Version | 構成 | 一言 |
+|---------|------|------|
+| v3 | 6体（オーケストレーター1 + 専門5） | 動いたけど、オーケストレーターが単一障害点 |
+| v4 | 3体（コンダクター1 + エンジニア2） | v3 の軽量版。まだコンダクター依存 |
+| v5 | 2体（コンダクター1 + エンジニア1） | さらに絞った。でもまだ止まる |
+| **v6** | **N体（全員フラット）** | **Hook で止まらない。オーケストレーター不要。完成形** |
 
-| コマンド | 説明 |
-|---------|------|
-| `server --port 9800` | サーバー起動 |
-| `join <名前>` | サーバーに登録 |
-| `status` | 全エージェントの状態確認 |
-| `listen <名前> --timeout 600` | メッセージ待ち（ブロック） |
-| `send <送信元> <宛先> <メッセージ>` | DM 送信 |
-| `broadcast <送信元> <メッセージ>` | 全員に通知 |
-| `barrier <ID> <名前> --expected N` | 全員揃うまで待機 |
+## 関連記事
 
-### タスク管理
+- [Zenn: 6体の Copilot を自作サーバーで協調させた話（v3）](https://zenn.dev/midomo/articles/40cd64af2d617a)
 
-| コマンド | 説明 |
-|---------|------|
-| `add-task <タスクID> --description "..."` | タスクをキューに追加 |
-| `wait-task <名前> --timeout 600` | タスク割り当てまでブロック |
-| `done-task <名前> --message "..."` | タスク完了を報告 |
-| `heartbeat <名前>` | 生存通知 |
+## v3 について
 
-### ワークフロー
+v3 のファイル（`server.py`, `client.py`, `instructions/`）はレガシーとしてそのまま残してあります。v3 の使い方は上の Zenn 記事を参照してください。
 
-| コマンド | 説明 |
-|---------|------|
-| `set-branch <名前> <ブランチ>` | 作業ブランチを宣言 |
-| `merge-request <名前> --branch ... --message ...` | 実装完了の申告 |
-| `set-phase <IMPLEMENT\|MERGE\|TEST\|DISCUSS\|SHUTDOWN>` | フェーズ切り替え |
-| `wait-phase <名前> <フェーズ> --timeout 600` | 指定フェーズまでブロック |
-| `test-result --passed / --failed --output ... --failures ...` | テスト結果の報告 |
+## 必要なもの
 
-### 議論
+- VS Code + GitHub Copilot（Pro 以上推奨。Free だとリクエスト制限に引っかかります）
+- Python 3.10+
 
-| コマンド | 説明 |
-|---------|------|
-| `discuss <名前> <テキスト>` | 議論に参加 |
-| `propose <名前> <テキスト>` | 修正案を提出 |
-| `approve <提案ID>` | 提案を承認 |
-| `reject <提案ID> --reason "..."` | 提案を却下 |
-| `get-discussion --round N` | 議論ログ取得 |
-| `shutdown --reason "完了"` | 全エージェント終了 |
-
-## 指示書の書き方
-
-`instructions/` フォルダに Markdown を置きます。最低限必要なのは：
-
-```markdown
-# エージェント名
-
-## 担当ファイル
-- path/to/file1.py
-- path/to/file2.py
-
-## やること
-- 具体的な変更内容1
-- 具体的な変更内容2
-
-## 完了条件
-- テストが通ること
-- 既存の機能を壊していないこと
-```
-
-**コツ:** ファイルパス・変更内容・完了条件を具体的に書く。実装方法は指定しない。
-
-## プロトコル
-
-改行区切りの JSON over TCP。
-
-```json
-→ {"cmd": "join", "agent": "PromptForge"}
-← {"ok": true, "message": "Joined as PromptForge"}
-
-→ {"cmd": "listen", "agent": "PromptForge", "timeout": 600}
-← {"ok": true, "messages": [{"from": "Guardian", "text": "...", "ts": 1234}]}
-```
-
-## 詳しい解説
-
-Zenn 記事: https://zenn.dev/midomo/articles/40cd64af2d617a
-
-## License
+## ライセンス
 
 MIT
